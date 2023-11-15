@@ -7,7 +7,7 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class productScraper {
 	
-	private $baseURL = "https://luboil.ee/catalog/products/"; //IMP - SET baseURL here.
+	private $baseURL = ""; //IMP - SET baseURL here.
 	private $proLinks = array();
 	private $scrapedData = array();
 
