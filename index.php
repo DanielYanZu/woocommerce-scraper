@@ -7,7 +7,7 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class productScraper {
 	
-	private $baseURL = "https://luboil.ee/catalog/products/"; //IMP - SET baseURL here.
+	private $baseURL = ""; //IMP - SET baseURL here.
 	private $proLinks = array();
 	private $scrapedData = array();
 
@@ -36,32 +36,39 @@ class productScraper {
 	  echo "<br><strong>Total results: ". count($this->scrapedData) ."</strong><br>";
 	  echo "<br><strong>Check crawled data(json) here: scraper/json-data/data-".$currStamp.".json</strong><br>";
 	  // print_r($this->scrapedData);
-	  
-	  
-	  // TEMP FOR FACETWP
-	  //  echo '<iframe id="theFrame" src="#" style="width:100%;height:100%;" frameborder="0"></iframe>';exit;
     }
 	
 	/**
 	 * get page content & set crawler
 	 */
-	public function set_baseURL( $productsURL ) { echo $productsURL ."<br>"; 
-	  $htmlContent = file_get_contents( $productsURL );
-	  /***
-		$dom1 = new DOMDocument();
-		$dom1->loadHTML($htmlContent);    
-		$node = $dom1->getElementById('shop-sidebar')->item(0);    
-		$outerHTML = $node->ownerDocument->saveHTML($node);
-		echo $outerHTML;exit;
-	
-	  if ( preg_match ( '/<div id="shop-sidebar"(.*?)<\/div>/s', $htmlContent, $matches ) ) {
-		foreach ( $matches as $key => $match ) {
-		  echo $key . ' => ' . htmlentities ( $match ) . '<br /><br />';
-		}
-	  } exit;
-	  ***/
-	  
+	public function set_baseURL( $baseURL ) { echo $baseURL ."<br>"; 
+	  $htmlContent = file_get_contents( $baseURL );
 	  $doc = new Crawler( $htmlContent );
+
+	  // Fetch all appliances, brands & categories
+	  $doc->filter('script')->each(function(Crawler $script, $i){
+		$aa = $script->text();
+		if( str_contains( $aa, "FWP_JSON" ) ){
+			$jsonData = html_entity_decode( substr( $aa, strlen( "window.FWP_JSON = " ) ) );
+		    $jsonData = substr( $jsonData, 0, strpos( $jsonData, '; window.FWP_HTTP' ) );
+			$jsonArr = json_decode( trim($jsonData), true);
+			if( isset($jsonArr['preload_data']) && isset($jsonArr['preload_data']['facets']) ) {
+				$domApp = new Crawler( $jsonArr['preload_data']['facets']['product_appliances'] );
+				$this->appliances[] = $domApp->filter('.facetwp-checkbox')->each(function($appElem, $i){
+					return $appElem->innerText();
+				});
+				$domBrands = new Crawler( $jsonArr['preload_data']['facets']['product_brands'] );
+				$this->brands[] = $domBrands->filter('.facetwp-checkbox')->each(function($brandElem, $i){
+					return $brandElem->innerText();
+				});
+				$domCat = new Crawler( $jsonArr['preload_data']['facets']['product_categories_en'] );
+				$this->categories[] = $domCat->filter('.facetwp-checkbox')->each(function($catElem, $i){
+					return $catElem->innerText();
+				});
+			}
+		}
+	  });
+
 	  $this->get_curr_paged_products( $doc );
 	}
 
@@ -81,22 +88,7 @@ class productScraper {
 	 */
 	public function get_curr_paged_products( $docObj ) {
 	  $this->proLinks = array();
-	  
-	/****
-	  $this->pd_appliances = array();
-
-	  echo $docObj->filter( '.sidebar-inner' )->html();exit;
-	  
-	  $this->appliances[] = $docObj->filter( '#shop-sidebar .facetwp-facet-product_appliances .facetwp-checkbox' )->each(function(Crawler $appliance, $i){
-		  echo $appliance->innerText();
-	  }); 
-	  print_r($this->appliances);exit;
-	 
-	  $this->brands;
-	  $this->categories;
-
-	****/
-	  
+  
 	  $pppCount = $docObj->filter( '.shop-container .products .product' );
 	  if( $pppCount->count() > 0 ) {
 		$pppCount->each(function (Crawler $product, $i){ 
