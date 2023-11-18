@@ -7,7 +7,7 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class productScraper {
 	
-	private $baseURL = ""; //IMP - SET baseURL here.
+	private $baseURL = "https://luboil.ee/catalog/products/"; //IMP - SET baseURL here.
 	private $proLinks = array();
 	private $scrapedData = array();
 
@@ -23,9 +23,13 @@ class productScraper {
       $this->set_baseURL( $this->baseURL );
 	  // Write in the file
 	  $currStamp = date('YmdHis');
-	  $path = 'json-data/data-'. $currStamp .'.json';
+	  $dirPath = realpath( dirname( __FILE__ ) ) . '/json-data';
+	  $filePath = $dirPath . '/data-'. $currStamp .'.json';
 	  $jsonString = json_encode($this->scrapedData, JSON_PRETTY_PRINT);
-	  $fp = fopen($path, 'w');
+	  if( !is_dir( $dirPath ) ){
+		mkdir($dirPath, 0755);
+	  }
+	  $fp = fopen($filePath, 'w');
 	  fwrite($fp, $jsonString);
 	  fclose($fp);
 	  
@@ -96,16 +100,26 @@ class productScraper {
 	  $pppCount = $docObj->filter( '.shop-container .products .product' );
 	  if( $pppCount->count() > 0 ) {
 		$pppCount->each(function (Crawler $product, $i){ 
-		  $this->proLinks[$i] = $product->filter( '.box-text-products .product-title a' )->link()->getUri();
-
-		  /****
+		  $pURL = $product->filter( '.box-text-products .product-title a' )->link()->getUri();
+		  $this->proLinks[$i] = $pURL;
+		  
+		  // Fetch product appliances, brands & categories from class
 		  $cn = $product->attr('class');
-		  $this->pd_appliances[$i] = array_filter(explode(' ', $cn), function($class){
-			if( str_contains($class, 'appliance-') ){
-				return $class;
+		  $this->pd_appliances[$pURL] = array_values( array_filter( array_map(function($class){
+			if( str_contains( $class, 'appliance-' ) ){
+			  return substr( $class, strlen( 'appliance-' ) );
 			}
-		  }); //->matches('appliance-');
-		  ****/
+		  }, explode(' ', $cn)) ) );
+		  $this->pd_brands[$pURL] = array_values( array_filter( array_map(function($class){
+			if( str_contains( $class, 'brand-' ) ){
+			  return substr( $class, strlen( 'brand-' ) );
+			}
+		  }, explode(' ', $cn)) ) );
+		  $this->pd_categories[$pURL] = array_values( array_filter( array_map(function($class){
+			if( str_contains( $class, 'product_cat-' ) ){
+			  return substr( $class, strlen( 'product_cat-' ) );
+			}
+		  }, explode(' ', $cn)) ) );
 		});
 	  }
 	  if( !empty($this->proLinks) ){
@@ -208,9 +222,9 @@ class productScraper {
 			                'price' 			=> $this->pd_price,
 			                'sku' 				=> $v['sku'],
 			                'ean' 				=> $v['ean'],
-			                'appliance' 		=> '', 
-			                'brand' 			=> '', 
-			                'category' 			=> '',
+			                'appliance' 		=> $this->pd_appliances[$this->pd_url], 
+			                'brand' 			=> $this->pd_brands[$this->pd_url], 
+			                'category' 			=> $this->pd_categories[$this->pd_url],
 			                'productURL' 		=> $this->pd_url,
 							'variationData'		=> $v
 		                  );
@@ -231,9 +245,9 @@ class productScraper {
 										'price' 			=> $normalProd['offers'][0]['price'],
 										'sku' 				=> $normalProd['sku'],
 										'ean' 				=> '',
-										'appliance' 		=> '', 
-										'brand' 			=> '', 
-										'category' 			=> '',
+										'appliance' 		=> $this->pd_appliances[$this->pd_url], 
+										'brand' 			=> $this->pd_brands[$this->pd_url], 
+										'category' 			=> $this->pd_categories[$this->pd_url],
 										'productURL' 		=> $this->pd_url,
 										'variationData'		=> null
 									);
