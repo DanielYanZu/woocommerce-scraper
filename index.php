@@ -12,10 +12,8 @@ class productScraper {
 	private $scrapedData = array();
 
 	//Product Variables
-	private $appliances = array();
-	private $brands = array();
-	private $categories = array();
-	private $pd_title, $pd_shortdesc, $pd_price, $pd_vol, $pd_categories, $pd_appliances, $pd_brands, $pd_url, $pd_variations;
+	private $appliances, $brands, $categories;
+	private $pd_title, $pd_shortdesc, $pd_price, $pd_vol, $pd_categories, $pd_appliances, $pd_brands, $pd_url, $pd_variations, $proType;
 
 	public function __construct() {
 	  if( trim($this->baseURL) == "" ){ echo "<strong>Please set baseURL to proceed further...</strong>"; exit;}
@@ -46,28 +44,30 @@ class productScraper {
 	  $doc = new Crawler( $htmlContent );
 
 	  // Fetch all appliances, brands & categories
-	  $doc->filter('script')->each(function(Crawler $script, $i){
-		$aa = $script->text();
+	  if( empty( $this->appliances ) || empty( $this->brands ) || empty( $this->categories ) ) {
+	  $doc->filter('script')->each( function( Crawler $script, $i ){
+	    $aa = $script->text();
 		if( str_contains( $aa, "FWP_JSON" ) ){
 			$jsonData = html_entity_decode( substr( $aa, strlen( "window.FWP_JSON = " ) ) );
 		    $jsonData = substr( $jsonData, 0, strpos( $jsonData, '; window.FWP_HTTP' ) );
 			$jsonArr = json_decode( trim($jsonData), true);
 			if( isset($jsonArr['preload_data']) && isset($jsonArr['preload_data']['facets']) ) {
 				$domApp = new Crawler( $jsonArr['preload_data']['facets']['product_appliances'] );
-				$this->appliances[] = $domApp->filter('.facetwp-checkbox')->each(function($appElem, $i){
-					return $appElem->innerText();
+				$domApp->filter('.facetwp-checkbox')->each(function($appElem, $i){
+					$this->appliances[ $this->create_slug( $appElem->innerText() ) ] = $appElem->innerText();
 				});
 				$domBrands = new Crawler( $jsonArr['preload_data']['facets']['product_brands'] );
-				$this->brands[] = $domBrands->filter('.facetwp-checkbox')->each(function($brandElem, $i){
-					return $brandElem->innerText();
+				$domBrands->filter('.facetwp-checkbox')->each(function($brandElem, $i){
+					$this->brands[ $this->create_slug( $brandElem->innerText() ) ] = $brandElem->innerText();
 				});
 				$domCat = new Crawler( $jsonArr['preload_data']['facets']['product_categories_en'] );
-				$this->categories[] = $domCat->filter('.facetwp-checkbox')->each(function($catElem, $i){
-					return $catElem->innerText();
+				$domCat->filter('.facetwp-checkbox')->each(function($catElem, $i){
+					$this->categories[ $this->create_slug( $catElem->innerText() ) ] = $catElem->innerText();
 				});
 			}
 		}
 	  });
+	  }
 
 	  $this->get_curr_paged_products( $doc );
 	}
@@ -99,17 +99,17 @@ class productScraper {
 		  $cn = $product->attr('class');
 		  $this->pd_appliances[$pURL] = array_values( array_filter( array_map(function($class){
 			if( str_contains( $class, 'appliance-' ) ){
-			  return substr( $class, strlen( 'appliance-' ) );
+			  return isset( $this->appliances[ substr( $class, strlen( 'appliance-' ) ) ] ) ? $this->appliances[ substr( $class, strlen( 'appliance-' ) ) ] : substr( $class, strlen( 'appliance-' ) );
 			}
 		  }, explode(' ', $cn)) ) );
 		  $this->pd_brands[$pURL] = array_values( array_filter( array_map(function($class){
 			if( str_contains( $class, 'brand-' ) ){
-			  return substr( $class, strlen( 'brand-' ) );
+			  return isset( $this->brands[ substr( $class, strlen( 'brand-' ) ) ] ) ? $this->brands[ substr( $class, strlen( 'brand-' ) ) ] : substr( $class, strlen( 'brand-' ) );
 			}
 		  }, explode(' ', $cn)) ) );
 		  $this->pd_categories[$pURL] = array_values( array_filter( array_map(function($class){
 			if( str_contains( $class, 'product_cat-' ) ){
-			  return substr( $class, strlen( 'product_cat-' ) );
+			  return isset($this->categories[ substr( $class, strlen( 'product_cat-' ) ) ]) ? $this->categories[ substr( $class, strlen( 'product_cat-' ) ) ] : substr( $class, strlen( 'product_cat-' ) );
 			}
 		  }, explode(' ', $cn)) ) );
 		});
@@ -183,6 +183,8 @@ class productScraper {
 		    $this->pd_url =			$htmlContent['productURL'];
 		    $this->pd_title = 		$objDoc->filter( '.product-main .product-info h1.product-title' )->text();
 		    $this->pd_shortdesc = 	$objDoc->filter( '.product-main .product-info .product-short-description' )->text();
+			// Identify product type
+			$this->proType = $objDoc->filter( '.shop-container > .product' )->matches( '.product-type-variable' ) ? "variable" : ( $objDoc->filter( '.shop-container > .product' )->matches( '.product-type-simple' ) ? "simple" : "" );
 
 		    $variantObj = $objDoc->filter( '.product-main .product-info form.variations_form' );
 		    if( $variantObj->count() > 0 ) {
@@ -205,9 +207,10 @@ class productScraper {
 				  }
 
 			      if( !empty($this->pd_variations) ) {
-			        foreach( $this->pd_variations as $v ){
+			        foreach( $this->pd_variations as $k => $v ){
 			      	  if( $v['attributes']['attribute_pa_volume'] === strtolower(str_replace(' ', '-', $this->pd_vol)) ){
 			      	    $this->scrapedData[] = array( 
+							'product_type'		=> $this->proType,
 			                'title' 			=> $this->pd_title,
 			                'shortDesc' 		=> $this->pd_shortdesc,
 			                'volume_capacity' 	=> $this->pd_vol,
@@ -231,6 +234,7 @@ class productScraper {
 				$normalProd = $objDoc->filter( 'script[type="application/ld+json"]' )->text();
 				$normalProd = json_decode($normalProd, true);
 				$this->scrapedData[] = array( 
+										'product_type'		=> $this->proType,		
 										'title' 			=> $this->pd_title,
 										'shortDesc' 		=> $this->pd_shortdesc,
 										'volume_capacity' 	=> '',
@@ -250,6 +254,19 @@ class productScraper {
 	  }
 
 	}
+	
+	/**
+	 * Create slug for random strings
+	 */
+	public function create_slug( $string ){
+	  $string = strtolower(trim($string));
+	  $string = str_replace('.', '-', $string);
+	  $string = preg_replace('/[^a-z0-9- ]/', '', $string);
+	  $string = preg_replace('/\s+/', ' ', $string);
+	  $slug = str_replace(' ', '-', $string);
+	  return $slug;
+	}
+
 }
 
 if ( class_exists( 'productScraper' ) ) {
