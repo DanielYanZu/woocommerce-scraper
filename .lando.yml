@@ -1,0 +1,15 @@
+name: woocommerce-scraper
+runtime:
+  extensions:
+    - xdebug
+services:
+  php:
+    type: php:8.1
+    via: nginx
+    webroot: .
+    xdebug: true
+    config:
+      php: .lando/php.ini
+tooling:
+  php:
+    service: php
