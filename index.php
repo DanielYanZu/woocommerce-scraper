@@ -388,6 +388,7 @@ class ScrapedProduct
 
 	protected $productData;
 	protected $localeUrls = [];
+	protected $documents = [];
 
 	private $pd_variations;
 
@@ -408,6 +409,11 @@ class ScrapedProduct
 	public function getUrls()
 	{
 		return $this->localeUrls;
+	}
+
+	public function getDocuments()
+	{
+		return $this->documents;
 	}
 
 	protected function crawl()
@@ -498,6 +504,24 @@ class ScrapedProduct
 				'sku' 				=> $normalProd['sku'],
 				'ean' 				=> '',
 			]);
+		}
+
+		$documentsNode = $objDoc->filter('.product-main .product-info .woocommerce-product-documents');
+		if ($documentsNode->count() > 0) {
+			$documentLinkNodes = $documentsNode->filter('a');
+			if ($documentLinkNodes->count() > 0) {
+				$documentLinkNodes->each(function (Crawler $documentLinkNode) {
+					$documentUrl = $documentLinkNode->attr('href');
+					$documentTitle = $documentLinkNode->text();
+
+					$this->documents[] = [
+						'title' => $documentTitle,
+						'url' => $documentUrl
+					];
+				});
+
+				$product['documents'] = $this->documents;
+			}
 		}
 
 		$wpmlMenuItemNode = $objDoc->filter('#header .nav.header-nav > .menu-item.wpml-ls-item');
