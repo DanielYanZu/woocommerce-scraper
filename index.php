@@ -6,54 +6,58 @@ include("vendor/autoload.php");
 
 use Symfony\Component\DomCrawler\Crawler;
 
-class productScraper
+class TheScraper
 {
+	/**
+	 * Intial values
+	 */
+	private string $mainBaseUrl = "https://luboil.ee/et/catalog/tooted/"; // !! SET $mainBaseUrl here.
+	private string $mainLocale = 'et';
+	private array $translateLocales = ['en'];
 
-	private $baseURL = "https://luboil.ee/catalog/products/"; //IMP - SET baseURL here.
-	private $proLinks = array();
-	private $scrapedData = array();
+	private string $timestamp;
+
+	/**
+	 * Dynamic values
+	 */
+	private string $currentScrapedUrl;
+	private array $products = [];
 
 	//Product Variables
-	private $appliances, $brands, $categories;
-	private $pd_title, $pd_shortdesc, $pd_price, $pd_vol, $pd_categories, $pd_appliances, $pd_brands, $pd_url, $pd_variations, $proType;
+	private array $appliances, $brands, $categories;
 
 	public function __construct()
 	{
-		if (trim($this->baseURL) == "") {
-			echo "<strong>Please set baseURL to proceed further...</strong>";
+		$this->timestamp = date('YmdHis');
+
+		if (trim($this->mainBaseUrl) == "") {
+			echo "<strong>Please set baseURL to proceed further...</strong>\n";
 			exit;
 		}
-		echo "<strong>FETCHED PAGES: </strong><br>";
-		$this->set_baseURL($this->baseURL);
-		// Write in the file
-		$currStamp = date('YmdHis');
-		$dirPath = realpath(dirname(__FILE__)) . '/json-data';
-		$filePath = $dirPath . '/data-' . $currStamp . '.json';
-		$jsonString = json_encode($this->scrapedData, JSON_PRETTY_PRINT);
-		if (!is_dir($dirPath)) {
-			mkdir($dirPath, 0755);
-		}
-		$fp = fopen($filePath, 'w');
-		fwrite($fp, $jsonString);
-		fclose($fp);
 
-		echo "<br><strong>Total results: " . count($this->scrapedData) . "</strong><br>";
-		echo "<br><strong>Check crawled data(json) here: scraper/json-data/data-" . $currStamp . ".json</strong><br>";
-		// print_r($this->scrapedData);
+		echo "<strong>FETCHED PAGES: </strong>\n";
+
+		$this->currentScrapedUrl = $this->mainBaseUrl;
+
+		$this->scrapePageForProductUrls($this->currentScrapedUrl);
+
+		$this->makeItHappen();
 	}
 
 	/**
 	 * get page content & set crawler
 	 */
-	public function set_baseURL($baseURL)
+	public function scrapePageForProductUrls(string $currentScrapedUrl)
 	{
-		echo $baseURL . "<br>";
-		$htmlContent = file_get_contents($baseURL);
-		$doc = new Crawler($htmlContent);
+		echo sprintf("Collecting product urls from: %s", $currentScrapedUrl);
+
+		$htmlContent = file_get_contents($currentScrapedUrl);
+
+		$currentPageNode = new Crawler($htmlContent);
 
 		// Fetch all appliances, brands & categories
 		if (empty($this->appliances) || empty($this->brands) || empty($this->categories)) {
-			$doc->filter('script')->each(function (Crawler $script, $i) {
+			$currentPageNode->filter('script')->each(function (Crawler $script, $i) {
 				$aa = $script->text();
 				if (str_contains($aa, "FWP_JSON")) {
 					$jsonData = html_entity_decode(substr($aa, strlen("window.FWP_JSON = ")));
@@ -68,7 +72,7 @@ class productScraper
 						$domBrands->filter('.facetwp-checkbox')->each(function ($brandElem, $i) {
 							$this->brands[$this->create_slug($brandElem->innerText())] = $brandElem->innerText();
 						});
-						$domCat = new Crawler($jsonArr['preload_data']['facets']['product_categories_en']);
+						$domCat = new Crawler($jsonArr['preload_data']['facets']['product_categories_' . $this->mainLocale]);
 						$domCat->filter('.facetwp-checkbox')->each(function ($catElem, $i) {
 							$this->categories[$this->create_slug($catElem->innerText())] = $catElem->innerText();
 						});
@@ -77,189 +81,116 @@ class productScraper
 			});
 		}
 
-		$this->get_curr_paged_products($doc);
-	}
-
-	/**
-	 * Check if the current page have next page of products
-	 */
-	public function check_for_next_page($docObj)
-	{
-		$next = $docObj->filter('.woocommerce-pagination .next');
-		if ($next->count() > 0) {
-			$this->baseURL = $next->link()->getUri();
-			$this->set_baseURL($this->baseURL);
-		}
+		$this->scrapeCurrentPageForProducts($currentPageNode);
 	}
 
 	/**
 	 * Get paged products URI for process
 	 */
-	public function get_curr_paged_products($docObj)
+	public function scrapeCurrentPageForProducts(Crawler $currentPageNode)
 	{
-		$this->proLinks = array();
+		$currentPageProductNodes = $currentPageNode->filter('.shop-container .products .product');
 
-		$pppCount = $docObj->filter('.shop-container .products .product');
-		if ($pppCount->count() > 0) {
-			$pppCount->each(function (Crawler $product, $i) {
-				$pURL = $product->filter('.box-text-products .product-title a')->link()->getUri();
-				$this->proLinks[$i] = $pURL;
+		if ($currentPageProductNodes->count() > 0) {
+			$currentPageProductNodes->each(function (Crawler $productCardNode, $i) {
+				$productCardClass = $productCardNode->attr('class');
+
+				$productClasses = explode(' ', $productCardClass);
+
+				$productId = $productCardNode->filter('.primary.button')->attr('data-product_id');
+				$productSku = $productCardNode->filter('.primary.button')->attr('data-product_sku');
+				$productUrl = $productCardNode->filter('.box-text-products .product-title a')->link()->getUri();
+
+				$this->products[$productId]['url'][$this->mainLocale] = $productUrl;
+				$this->products[$productId]['sku'] = $productSku;
 
 				// Fetch product appliances, brands & categories from class
-				$cn = $product->attr('class');
-				$this->pd_appliances[$pURL] = array_values(array_filter(array_map(function ($class) {
-					if (str_contains($class, 'appliance-')) {
-						return isset($this->appliances[substr($class, strlen('appliance-'))]) ? $this->appliances[substr($class, strlen('appliance-'))] : substr($class, strlen('appliance-'));
-					}
-				}, explode(' ', $cn))));
-				$this->pd_brands[$pURL] = array_values(array_filter(array_map(function ($class) {
-					if (str_contains($class, 'brand-')) {
-						return isset($this->brands[substr($class, strlen('brand-'))]) ? $this->brands[substr($class, strlen('brand-'))] : substr($class, strlen('brand-'));
-					}
-				}, explode(' ', $cn))));
-				$this->pd_categories[$pURL] = array_values(array_filter(array_map(function ($class) {
-					if (str_contains($class, 'product_cat-')) {
-						return isset($this->categories[substr($class, strlen('product_cat-'))]) ? $this->categories[substr($class, strlen('product_cat-'))] : substr($class, strlen('product_cat-'));
-					}
-				}, explode(' ', $cn))));
+
+				$this->products[$productId]['appliances'] = array_values(
+					array_filter(
+						array_map(
+							function ($class) {
+								if (str_contains($class, 'appliance-')) {
+									$termSlug = substr($class, strlen('appliance-'));
+									return [
+										$termSlug => isset($this->appliances[$termSlug])
+											? $this->appliances[$termSlug]
+											: $termSlug
+									];
+								}
+							},
+							$productClasses
+						)
+					)
+				);
+
+				$this->products[$productId]['brands'] = array_values(
+					array_filter(
+						array_map(
+							function ($class) {
+								if (str_contains($class, 'brand-')) {
+									$termSlug = substr($class, strlen('brand-'));
+									return [
+										$termSlug => isset($this->brands[$termSlug])
+											? $this->brands[$termSlug]
+											: $termSlug
+									];
+								}
+							},
+							$productClasses
+						)
+					)
+				);
+
+				$this->products[$productId]['categories'] = array_values(
+					array_filter(
+						array_map(
+							function ($class) {
+								if (str_contains($class, 'product_cat-')) {
+									$termSlug = substr($class, strlen('product_cat-'));
+									return [
+										$termSlug => isset($this->categories[$termSlug])
+											? $this->categories[$termSlug]
+											: $termSlug
+									];
+								}
+							},
+							$productClasses
+						)
+					)
+				);
 			});
 		}
-		if (!empty($this->proLinks)) {
-			$this->multi_curl_paged_products($this->proLinks);
+
+		echo sprintf(" >>> now %s\n", count($this->products));
+
+		$nextPageLinkNode = $currentPageNode->filter('.woocommerce-pagination .next');
+
+		if ($nextPageLinkNode->count() > 0) {
+			$this->currentScrapedUrl = $nextPageLinkNode->link()->getUri();
+			$this->scrapePageForProductUrls($this->currentScrapedUrl);
 		}
-		$this->check_for_next_page($docObj);
+
+		echo "Product urls collected.\n";
 	}
 
-	/**
-	 * Multi-cURL to paged products
-	 */
-	public function multi_curl_paged_products($urls = array())
+	protected function makeItHappen()
 	{
-		$multiCurl = array();
+		$mainLocaleBatch = new LocaleScraper($this->products, $this->mainLocale);
+		$mainLocaleData = array_values($mainLocaleBatch->scrape()->getData());
+		$this->writeToJson($mainLocaleData, $this->mainLocale);
 
-		$headers = array();
-		$headers[] = 'Pragma: no-cache';
-		$headers[] = 'Dnt: 1';
-		$headers[] = 'Accept-Encoding: gzip, deflate, br';
-		$headers[] = 'Accept-Language: en-US,en;q=0.8';
-		$headers[] = 'Upgrade-Insecure-Requests: 1';
-		$headers[] = 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.101 Safari/537.36';
-		$headers[] = 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8';
-		$headers[] = 'Cache-Control: no-cache';
+		$this->products = $mainLocaleBatch->getProducts();
 
-		$mh = curl_multi_init();
+		foreach ($this->translateLocales as $translateLocale) { // Iterate additional locale
+			$otherLocaleBatch = new LocaleScraper($this->products, $translateLocale);
+			$otherLocaleBatch = $otherLocaleBatch->scrape();
 
-		foreach ($urls as $k => $url) {
-			if (trim($url)) {
-				$multiCurl[$k] = curl_init();
+			$otherLocaleData = array_values($otherLocaleBatch->getData());
 
-				curl_setopt($multiCurl[$k], CURLOPT_URL, 			$url);
-				curl_setopt($multiCurl[$k], CURLOPT_CUSTOMREQUEST, 	'GET');
-				curl_setopt($multiCurl[$k], CURLOPT_HEADER, 		1);
-				curl_setopt($multiCurl[$k], CURLOPT_HTTPHEADER, 	$headers);
-				curl_setopt($multiCurl[$k], CURLOPT_SSL_VERIFYPEER,	0);
-				curl_setopt($multiCurl[$k], CURLOPT_SSL_VERIFYHOST,	0);
-				curl_setopt($multiCurl[$k], CURLOPT_ENCODING, 		"");
-				curl_setopt($multiCurl[$k], CURLOPT_RETURNTRANSFER,	1);
-				curl_setopt($multiCurl[$k], CURLOPT_FOLLOWLOCATION,	1);
-				curl_setopt($multiCurl[$k], CURLOPT_AUTOREFERER, 	1);
-				curl_setopt($multiCurl[$k], CURLOPT_CONNECTTIMEOUT,	60);
-				curl_setopt($multiCurl[$k], CURLOPT_TIMEOUT, 		60);
-				curl_setopt($multiCurl[$k], CURLOPT_MAXREDIRS, 		3);
+			$this->writeToJson($otherLocaleData, $translateLocale);
 
-				curl_multi_add_handle($mh, $multiCurl[$k]);
-			}
-		}
-
-		$index = null;
-		do {
-			curl_multi_exec($mh, $index);
-			curl_multi_select($mh, 30);
-		} while ($index > 0);
-
-		// Collect all data here and clean up
-		foreach ($multiCurl as $key => $request) {
-			$cURLinfo = curl_getinfo($request);
-			$documents[$key]['content'] = curl_multi_getcontent($request);
-			$documents[$key]['productURL'] = $cURLinfo['url'];
-			curl_multi_remove_handle($mh, $request); // Assuming we're being responsible about our resource management
-			curl_close($request);                    // being responsible again, THIS MUST GO AFTER curl_multi_getcontent();
-		}
-		curl_multi_close($mh);
-
-		if (count($documents) > 0) {
-			foreach ($documents as $k => $htmlContent) {
-				if (!empty(trim($htmlContent['content']))) {
-					$objDoc = new Crawler($htmlContent['content']);
-					$this->pd_url =			$htmlContent['productURL'];
-					$this->pd_title = 		$objDoc->filter('.product-main .product-info h1.product-title')->text();
-					$this->pd_shortdesc = 	$objDoc->filter('.product-main .product-info .product-short-description')->text();
-					// Identify product type
-					$this->proType = $objDoc->filter('.shop-container > .product')->matches('.product-type-variable') ? "variable" : ($objDoc->filter('.shop-container > .product')->matches('.product-type-simple') ? "simple" : "");
-
-					$variantObj = $objDoc->filter('.product-main .product-info form.variations_form');
-					if ($variantObj->count() > 0) {
-
-						$varData = $variantObj->attr('data-product_variations');
-						$this->pd_variations = !empty($varData) ? json_decode($varData, true) : array();
-
-						$variantObjN = $variantObj->filter('.variations .variation-radio-button');
-						if ($variantObjN->count() > 0) {
-							$variantObjN->each(function (Crawler $product, $i) {
-								$this->pd_vol 	= substr($product->innerText(), 0, strpos($product->innerText(), " ", strpos($product->innerText(), " ") + 1));
-								$prodPrice	 	= $product->filter('.woocommerce-Price-amount.amount');
-								if ($prodPrice->count() > 0) {
-									$this->pd_price = $prodPrice->innerText();
-								} else {
-									// $normalProd = $objDoc->filter( 'script[type="application/ld+json"]' )->text();
-									// $normalProd = json_decode($normalProd, true);
-									// $this->pd_price = $normalProd['offers'][0]['price'];
-									$this->pd_price = '';
-								}
-
-								if (!empty($this->pd_variations)) {
-									foreach ($this->pd_variations as $k => $v) {
-										if ($v['attributes']['attribute_pa_volume'] === strtolower(str_replace(' ', '-', $this->pd_vol))) {
-											$this->scrapedData[] = array(
-												'product_type'		=> $this->proType,
-												'title' 			=> $this->pd_title,
-												'shortDesc' 		=> $this->pd_shortdesc,
-												'volume_capacity' 	=> $this->pd_vol,
-												'price' 			=> $this->pd_price,
-												'sku' 				=> $v['sku'],
-												'ean' 				=> $v['ean'],
-												'appliance' 		=> $this->pd_appliances[$this->pd_url],
-												'brand' 			=> $this->pd_brands[$this->pd_url],
-												'category' 			=> $this->pd_categories[$this->pd_url],
-												'productURL' 		=> $this->pd_url,
-												'variationData'		=> $v
-											);
-										}
-									}
-								}
-							});
-						}
-					} else { //For normal products
-						$normalProd = $objDoc->filter('script[type="application/ld+json"]')->text();
-						$normalProd = json_decode($normalProd, true);
-						$this->scrapedData[] = array(
-							'product_type'		=> $this->proType,
-							'title' 			=> $this->pd_title,
-							'shortDesc' 		=> $this->pd_shortdesc,
-							'volume_capacity' 	=> '',
-							'price' 			=> $normalProd['offers'][0]['price'],
-							'sku' 				=> $normalProd['sku'],
-							'ean' 				=> '',
-							'appliance' 		=> $this->pd_appliances[$this->pd_url],
-							'brand' 			=> $this->pd_brands[$this->pd_url],
-							'category' 			=> $this->pd_categories[$this->pd_url],
-							'productURL' 		=> $this->pd_url,
-							'variationData'		=> null
-						);
-					}
-					unset($objDoc);
-				}
-			}
+			$this->products = $otherLocaleBatch->getProducts();
 		}
 	}
 
@@ -275,8 +206,334 @@ class productScraper
 		$slug = str_replace(' ', '-', $string);
 		return $slug;
 	}
+
+	public function writeToJson(array $scrapedProducts, string $locale)
+	{
+		// Write in the file
+
+		$dirPath = realpath(dirname(__FILE__)) . '/json-data';
+
+		$filePath = sprintf(
+			'%s/data-%s-%s.json',
+			$dirPath,
+			$this->timestamp,
+			$locale
+		);
+
+		$jsonString = json_encode($scrapedProducts, JSON_PRETTY_PRINT);
+
+		if (!is_dir($dirPath)) {
+			mkdir($dirPath, 0755);
+		}
+
+		$fp = fopen($filePath, 'w');
+		fwrite($fp, $jsonString);
+		fclose($fp);
+
+		echo sprintf(
+			"Total results: %s\n",
+			count($scrapedProducts)
+		);
+	}
 }
 
-if (class_exists('productScraper')) {
-	new productScraper;
+class LocaleScraper
+{
+	private array $products;
+	private string $locale;
+
+	public function __construct(array $productsData, string $locale)
+	{
+		$this->products = $productsData;
+		$this->locale = $locale;
+	}
+
+	public function scrape(): self
+	{
+		$this->multiCurlProductPages();
+
+		return $this;
+	}
+
+	public function getData(): array
+	{
+		return array_map(function ($product) {
+			return $product['data'][$this->locale];
+		}, $this->products);
+	}
+
+	public function getProducts(): array
+	{
+		return $this->products;
+	}
+
+	/**
+	 * Multi-cURL to paged products
+	 */
+	protected function multiCurlProductPages()
+	{
+		echo sprintf(
+			"Multi curling all product urls..."
+		);
+
+		$multiCurl = [];
+
+		$headers = [
+			'Pragma: no-cache',
+			'Dnt: 1',
+			'Accept-Encoding: gzip, deflate, br',
+			'Accept-Language: en-US,en;q=0.8',
+			'Upgrade-Insecure-Requests: 1',
+			'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.101 Safari/537.36',
+			'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+			'Cache-Control: no-cache',
+		];
+
+		$multiCurlHandle = curl_multi_init();
+
+		foreach ($this->products as $productId => $productData) {
+			if (!isset($productData['url'][$this->locale])) {
+				continue;
+			}
+			$productUrl = $productData['url'][$this->locale];
+
+			if (trim($productUrl)) {
+				$multiCurl[$productId] = curl_init();
+
+				curl_setopt($multiCurl[$productId], CURLOPT_URL, 			$productUrl);
+				curl_setopt($multiCurl[$productId], CURLOPT_CUSTOMREQUEST, 	'GET');
+				curl_setopt($multiCurl[$productId], CURLOPT_HEADER, 		1);
+				curl_setopt($multiCurl[$productId], CURLOPT_HTTPHEADER, 	$headers);
+				curl_setopt($multiCurl[$productId], CURLOPT_SSL_VERIFYPEER,	0);
+				curl_setopt($multiCurl[$productId], CURLOPT_SSL_VERIFYHOST,	0);
+				curl_setopt($multiCurl[$productId], CURLOPT_ENCODING, 		"");
+				curl_setopt($multiCurl[$productId], CURLOPT_RETURNTRANSFER,	1);
+				curl_setopt($multiCurl[$productId], CURLOPT_FOLLOWLOCATION,	1);
+				curl_setopt($multiCurl[$productId], CURLOPT_AUTOREFERER, 	1);
+				curl_setopt($multiCurl[$productId], CURLOPT_CONNECTTIMEOUT,	60);
+				curl_setopt($multiCurl[$productId], CURLOPT_TIMEOUT, 		60);
+				curl_setopt($multiCurl[$productId], CURLOPT_MAXREDIRS, 		3);
+
+				curl_multi_add_handle($multiCurlHandle, $multiCurl[$productId]);
+			}
+		}
+
+		$index = null;
+		do {
+			curl_multi_exec($multiCurlHandle, $index);
+			curl_multi_select($multiCurlHandle, 30);
+		} while ($index > 0);
+
+		$documents = [];
+
+		// Collect all data here and clean up
+		foreach ($multiCurl as $productId => $request) {
+			$cURLinfo = curl_getinfo($request);
+
+			$documents[$productId] = curl_multi_getcontent($request);
+
+			curl_multi_remove_handle($multiCurlHandle, $request); // Assuming we're being responsible about our resource management
+			curl_close($request); // being responsible again, THIS MUST GO AFTER curl_multi_getcontent();
+		}
+
+		curl_multi_close($multiCurlHandle);
+
+		if (count($documents) > 0) {
+			foreach ($documents as $productId => $productPageHtml) {
+				$this->products[$productId]['html'][$this->locale] = $productPageHtml;
+			}
+		} else {
+			echo "BIG PROBLEM!\n";
+			return;
+		}
+
+		echo sprintf(
+			"COMPLETE. Curled %s documents for %s locale.\n",
+			count($documents),
+			$this->locale
+		);
+
+		echo sprintf(
+			"Scraping for products: "
+		);
+
+		foreach ($this->products as $productId => $productData) {
+			$scrapedProduct = new ScrapedProduct($productId, $productData, $this->locale);
+			$this->products[$productId]['data'][$this->locale] = $scrapedProduct->getData();
+
+			$otherUrls = $scrapedProduct->getUrls();
+			if (count($otherUrls) > 1) {
+				foreach ($otherUrls as $locale => $url) {
+					$this->products[$productId]['url'][$locale] = $url;
+				}
+			}
+
+			echo sprintf(
+				"%s... ",
+				$productId
+			);
+		}
+
+		echo sprintf(
+			"ALL SCRAPED.\n"
+		);
+	}
+}
+
+class ScrapedProduct
+{
+	public $id;
+	public $product;
+	public $locale;
+
+	protected $productData;
+	protected $localeUrls = [];
+
+	private $pd_variations;
+
+	public function __construct($productId, $product, $locale)
+	{
+		$this->id = $productId;
+		$this->product = $product;
+		$this->locale = $locale;
+
+		$this->crawl();
+	}
+
+	public function getData()
+	{
+		return $this->productData;
+	}
+
+	public function getUrls()
+	{
+		return $this->localeUrls;
+	}
+
+	protected function crawl()
+	{
+		if (empty($this->product['html'][$this->locale])) {
+			sprintf(
+				"ERROR: product %s html for %s locale empty!\n",
+				$this->id,
+				$this->locale,
+			);
+
+			$this->productData = null;
+
+			return;
+		}
+
+		$objDoc = new Crawler($this->product['html'][$this->locale]);
+
+		$productTitle = 		$objDoc->filter('.product-main .product-info h1.product-title')->text();
+		$productShortDesc = 	$objDoc->filter('.product-main .product-info .product-short-description')->text();
+		$productType =			$objDoc->filter('.shop-container > .product')->matches('.product-type-variable')
+			? "variable"
+			: ($objDoc->filter('.shop-container > .product')->matches('.product-type-simple')
+				? "simple"
+				: "");
+
+		$image = null;
+
+		try {
+			$imageEl = 		$objDoc->filter('.woocommerce-product-gallery__image .wp-post-image');
+			$imageUrl =		$imageEl->attr('src');
+			$imageWidth =	$imageEl->attr('width');
+			$imageHeight =	$imageEl->attr('height');
+			$image = 		str_replace(sprintf('-%sx%s', $imageWidth, $imageHeight), "", $imageUrl);
+		} catch (\Throwable $th) {
+			//throw $th;
+		}
+
+		$productImage = $image ? $image : '';
+
+		$product = [
+			'url' 				=> $this->product['url'][$this->locale],
+			'id'				=> $this->id,
+			'locale'			=> $this->locale,
+
+			'type'				=> $productType,
+			'title' 			=> $productTitle,
+			'image_url'			=> $productImage,
+			'short_desc' 		=> $productShortDesc,
+			// 'appliance' 		=> $this->pd_appliances[$this->pd_url],
+			// 'appliances'		=> implode('|', $this->pd_appliances[$this->pd_url]),
+			// 'brand' 			=> $this->pd_brands[$this->pd_url],
+			// 'brands'			=> implode('|', $this->pd_brands[$this->pd_url]),
+			// 'category' 			=> $this->pd_categories[$this->pd_url],
+			// 'categories'		=> implode('|', $this->pd_categories[$this->pd_url]),
+
+		];
+
+		foreach (['appliances', 'brands', 'categories'] as $key) {
+			if (isset($this->product[$key]) && count($this->product[$key]) > 0) {
+				$items = [];
+				foreach ($this->product[$key] as $values) {
+					foreach ($values as $termKey => $termValue) {
+						$items[] = $termKey;
+					}
+				}
+				$product[$key] = implode('|', $items);
+			}
+		}
+
+		$variantObj = $objDoc->filter('.product-main .product-info form.variations_form');
+		if ($variantObj->count() > 0) {
+			$product['variations'] = [];
+
+			$varData = $variantObj->attr('data-product_variations');
+			$this->pd_variations = !empty($varData) ? json_decode($varData, true) : [];
+
+			$product['variations'] = $this->pd_variations;
+		} else { //For normal products
+			$product['variations'] = null;
+
+			$normalProd = $objDoc->filter('script[type="application/ld+json"]')->text();
+			$normalProd = json_decode($normalProd, true);
+
+			$product = array_merge($product, [
+				'volume_capacity' 	=> '',
+				'price' 			=> $normalProd['offers'][0]['price'],
+				'sku' 				=> $normalProd['sku'],
+				'ean' 				=> '',
+			]);
+		}
+
+		$wpmlMenuItemNode = $objDoc->filter('#header .nav.header-nav > .menu-item.wpml-ls-item');
+		if ($wpmlMenuItemNode->count() > 0) {
+			// $wpmlMenuItemId = $wpmlMenuItemNode->attr('id');
+			// $start = substr($wpmlMenuItemId, 0, (strlen($wpmlMenuItemId) - strlen($this->locale)));
+
+			$otherLocales = $wpmlMenuItemNode->filter('.wpml-ls-item');
+			if ($otherLocales->count() > 0) {
+				$otherLocales->each(function (Crawler $localeItemNode) {
+					$localeItemId = $localeItemNode->attr('id');
+					$otherLocale = substr($localeItemId, -2);
+					$otherLocaleUrl = $localeItemNode->filter('a')->link()->getUri();
+					$this->localeUrls[$otherLocale] = $otherLocaleUrl;
+
+					// echo sprintf(
+					// 	"Found translated url: %s\n",
+					// 	$otherLocaleUrl
+					// );
+				});
+			} else {
+				throw new Exception('PROBLEM 2');
+
+				echo sprintf(
+					"No other locales found for %s.\n",
+					$this->id
+				);
+			}
+		} else {
+			throw new Exception('PROBLEM 1');
+		}
+
+		$this->productData = $product;
+	}
+}
+
+if (class_exists('TheScraper')) {
+	new TheScraper;
 };
