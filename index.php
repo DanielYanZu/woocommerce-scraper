@@ -11,7 +11,7 @@ class TheScraper
 	/**
 	 * Intial values
 	 */
-	private string $mainBaseUrl = "https://luboil.ee/et/catalog/tooted/"; // !! SET $mainBaseUrl here.
+	private string $mainBaseUrl = ""; // !! SET $mainBaseUrl here.
 	private string $mainLocale = 'et';
 	private array $translateLocales = ['en'];
 
